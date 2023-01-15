@@ -1,7 +1,6 @@
 ---
-title: "Time Series Exam"
-subtitle: Electricity consumption forcasting
-author: "Moussa Griche, DS-S22 Student"
+title: "Electricity consumption forcasting"
+author: "Moussa Grich"
 date: "2023-01-12"
 output:
   pdf_document: 
@@ -10,37 +9,15 @@ output:
 
   
 geometry: margin=1cm
-
 ---
 
-\newpage
-```{=latex}
-\setcounter{tocdepth}{4}
-\tableofcontents
-```
-\newpage
 
 
-\makeatletter
-\renewcommand\paragraph{\@startsection{paragraph}{4}{\z@}%
-  {-3.25ex\@plus -1ex \@minus -.2ex}%
-  {1.5ex \@plus .2ex}%
-  {\normalfont\normalsize\bfseries}}
-\makeatother
-
-
-```{r include=FALSE}
-memory.limit(size=8000)
-```
 
 ```{r include=FALSE}
 library(feasts)
 library(writexl)
 library(smooth)
-```
-
-
-```{r include=FALSE}
 library(readxl)
 library(TSstudio)
 library(ggplot2)
@@ -1373,7 +1350,7 @@ autoplot(Elect_WOOT_D[,"Power_(kW)"], series="Electricity Consumption 01/01/2010
 Pred_DataFrame <- data.frame("18th_Elect_Pred_WOOT" = as.numeric(Elect_WOOT_D_Chosen_Model_forecast$mean) , "18th_Elect_Pred_WOT" = as.numeric(Elect_WOT_D_Chosen_Model_forecast$mean))
 
 #Save prediction results to xlsx file
-write_xlsx(Pred_DataFrame, path  = "./Moussa_GRICHE.xlsx")
+write_xlsx(Pred_DataFrame, path  = "./02-18th_electricity_consumption_forecast.xlsx")
 ```
 
 # V- Conclusion
