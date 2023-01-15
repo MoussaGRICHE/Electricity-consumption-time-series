@@ -1,0 +1,1381 @@
+---
+title: "Time Series Exam"
+subtitle: Electricity consumption forcasting
+author: "Moussa Griche, DS-S22 Student"
+date: "2023-01-12"
+output:
+  pdf_document: 
+    toc: no 
+    toc_depth: 3  
+
+  
+geometry: margin=1cm
+
+---
+
+\newpage
+```{=latex}
+\setcounter{tocdepth}{4}
+\tableofcontents
+```
+\newpage
+
+
+\makeatletter
+\renewcommand\paragraph{\@startsection{paragraph}{4}{\z@}%
+  {-3.25ex\@plus -1ex \@minus -.2ex}%
+  {1.5ex \@plus .2ex}%
+  {\normalfont\normalsize\bfseries}}
+\makeatother
+
+
+```{r include=FALSE}
+memory.limit(size=8000)
+```
+
+```{r include=FALSE}
+library(feasts)
+library(writexl)
+library(smooth)
+```
+
+
+```{r include=FALSE}
+library(readxl)
+library(TSstudio)
+library(ggplot2)
+library(tidyverse)
+library(fpp2) 
+library(tsbox) 
+library(tseries)
+library(stats)
+library(forecast)
+library(xts)
+library(prophet)
+```
+
+# I- Analysing the Time serie
+## I-1- Uploading Data
+
+```{r}
+
+Elect_data <- read_excel("./Elec-train.xlsx")
+Elect_data$Timestamp = as.POSIXct(Elect_data$Timestamp, format="%m/%d/%Y %H:%M")
+Elect <- xts(Elect_data[,c(2,3)], Elect_data$Timestamp)
+```
+
+
+
+## I-2- Ploting the time series
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+plot(Elect)
+```
+
+## I-3- Analysing the trend and seasonality:
+
+We could see that is possible to have a daily and weekly seasonality. 
+Let's try to test the seasonality of this time series.
+
+To analyse the double seasonality of the electricity consumption (kW), we make the frequency of the time series equal to 96 and 96*7. Like this, the time series became a daily time series.
+
+```{r}
+Elect_WOOT <- xts(Elect_data[,c(2,3)], Elect_data$Timestamp)
+Elect_WOOT <- window(Elect_WOOT, start = "2010-01-01 01:15:00", end = "2010-02-17 23:45:00")
+Elect_WOOT_2S <- msts(Elect_WOOT, seasonal.periods = c(96,672), start=c(1,6))
+```
+
+
+
+```{r}
+Elect_WOOT_D_decompose <- mstl(Elect_WOOT_2S[,"Power_(kW)"])
+autoplot(Elect_WOOT_D_decompose)
+```
+We can see from the decompose plot that the electricity consumption (kW) time series has a  trend and the double seasonality is present.
+
+```{r fig.height = 3, fig.width = 6, fig.align='center'}
+ggseasonplot(Elect_WOOT_2S[,"Power_(kW)"])
+```
+
+The ggseasonal plot confirm that this time series hase a daily and weekly seasonality.
+
+
+
+```{r}
+ggtsdisplay(Elect_WOOT_2S[,"Power_(kW)"])
+```
+
+The ACF plot confirm what we have already seen (the electricity consumption (kW) time series has a seasonality)
+
+
+## I-4- Spelliting the electricity consumption (kW) time serie into train and test set
+
+As we have seen that the electricity consumption (kW) time series has a daily and weekly seasonality, we take a test set equal to a week observations. Like this, we test over all days week and capt all the seasonality.
+
+Since we should forecast one day electricity consumption, we start with fitting models with only daily seasonality and then we see if there is some differences with models fitted with double seasonality time series.
+
+```{r}
+#Splitting data to training dataset and testing dataset
+Elect_WOOT_D <- ts(Elect_WOOT, frequency = 96, start=c(1,6))
+
+Elect_D.ts.train <- window(Elect_WOOT_D, start=c(1,6), end=c(41,96))
+
+Elect_D.ts.test <- window(Elect_WOOT_D, start=c(42,1), end=c(48,96))
+```
+
+
+# II- Simple seasonality forecast:
+
+## II-1- Fitting Electricity Consumption (kW) models without using outdoor temperature:
+
+### II-1-1- Forecasting with exponential smoothing
+
+#### II-1-1-1 Holt Winters with Additive Seasonality
+
+```{r}
+Elect_WOOT_D_hw <- HoltWinters(Elect_D.ts.train[,"Power_(kW)"], alpha=NULL, beta = NULL, gamma = NULL)
+checkresiduals(Elect_WOOT_D_hw, lag.max=96)
+```
+
+```{r}
+Elect_WOOT_D_hw_forecast <- forecast :: forecast(Elect_WOOT_D_hw, h=672)
+```
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(Elect_WOOT_D_hw_forecast$mean, series='HW with Additive Seasonal')+
+  ggtitle ('Electricity Consumption (kW) per hour') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+
+```{r}
+Elect_WOOT_hw_RMSE <- sqrt(mean((Elect_WOOT_D_hw_forecast$mean - Elect_D.ts.test[,"Power_(kW)"])**2))
+
+cat("The RMSE of HW model with Additive Seasonal equale to:", Elect_WOOT_hw_RMSE, "\n")
+
+```
+We see from the Holt Winters model with Additive seasonality, that the residuals are not white noise (residuals are not independents). 
+
+
+#### II-1-1-2- Holt Winters with Multiplicative Seasonality
+
+```{r}
+Elect_WOOT_D_hw_MS <- HoltWinters(Elect_D.ts.train[,"Power_(kW)"], seasonal = "multiplicative", alpha=NULL, beta = NULL, gamma = NULL)
+checkresiduals(Elect_WOOT_D_hw_MS, lag.max=96)
+```
+
+```{r}
+Elect_WOOT_D_hw_MS_forecast <- forecast :: forecast(Elect_WOOT_D_hw_MS, h=672)
+```
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(Elect_WOOT_D_hw_MS_forecast$mean, series='HW with Multiplicative Seasonal')+
+  ggtitle ('Electricity Consumption (kW) per hour') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+
+```{r}
+Elect_WOOT_D_hw_MS_RMSE <- sqrt(mean((Elect_WOOT_D_hw_MS_forecast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+
+cat("The RMSE of HW model with Multiplicative Seasonal equale to:", Elect_WOOT_D_hw_MS_RMSE, "\n")
+
+```
+With the Multiplicative Seasonal in Holt Winters model, the residuals still not white noise. 
+
+
+### II-1-2- Forecasting Auto SARIMA Model:
+
+#### II-1-2-1- Forecasting Auto SARIMA Model:
+
+```{r fig.align='left'}
+Elect_WOOT_D_auto.arima <- auto.arima(Elect_D.ts.train[,"Power_(kW)"])
+checkresiduals(Elect_WOOT_D_auto.arima)
+```
+```{r}
+
+ggtsdisplay(Elect_WOOT_D_auto.arima$residuals)
+```
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOOT_D_auto.arima_forcast <- forecast::forecast(Elect_WOOT_D_auto.arima, h=672)
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(Elect_WOOT_D_auto.arima_forcast$mean, series='Auto SARIMA') +
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+
+
+```
+
+```{r}
+Elect_WOOT_D_auto.arima_RMSE <- sqrt(mean((Elect_WOOT_D_auto.arima_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOOT_D_auto.arima_AIC <- Elect_WOOT_D_auto.arima$aicc
+
+cat("The RMSE of Auto_Arima model equal to:", Elect_WOOT_D_auto.arima_RMSE,"\n")
+cat("The AIC of Auto_Arima model equal to:", Elect_WOOT_D_auto.arima_AIC,"\n")
+
+```
+The Auto SARIMA Model is no so good because we can see from the ACF and PACF that the residuals are correlated and Ljung-Box test gives a p-value <<<<0.05. So, the residuals for the Auto SARIMA model are not white noise.
+
+#### II-1-2-2- Forecasting Auto SARIMA Model with Box-Cox transformation :
+
+
+```{r fig.align='left'}
+Elect_WOOT_D_auto.arima_BC <- auto.arima(Elect_D.ts.train[,"Power_(kW)"], lambda = 'auto')
+checkresiduals(Elect_WOOT_D_auto.arima_BC)
+```
+```{r fig.align='left'}
+ggtsdisplay(Elect_WOOT_D_auto.arima_BC$residuals)
+```
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOOT_D_auto.arima_BC_forcast <- forecast::forecast(Elect_WOOT_D_auto.arima_BC, h=672)
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(Elect_WOOT_D_auto.arima_BC_forcast$mean, series='Auto SARIMA with Box-Cox')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+
+
+```
+
+```{r}
+Elect_WOOT_D_auto.arima_BC_RMSE <- sqrt(mean((Elect_WOOT_D_auto.arima_BC_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOOT_D_auto.arima_BC_AIC <- Elect_WOOT_D_auto.arima$aicc
+
+cat("The RMSE of Auto SARIMA model with Box-Cox Transformation equal to:", Elect_WOOT_D_auto.arima_BC_RMSE,"\n")
+cat("The AIC of Auto SARIMA model with Box-Cox Transformation equal to:", Elect_WOOT_D_auto.arima_BC_AIC,"\n")
+
+```
+
+Here, the idea is to add a Box Cox transformation to the Auto SARIMA Model to get better model. But the results show that we still have the same problem of the residuals.
+
+
+#### II-1-2-3- Forecasting Auto SARIMA Model with Fourrier transformation :
+
+```{r fig.align='left'}
+Elect.train_TF <- window(Elect, start = "2010-01-01 01:15:00", end = "2010-02-10 23:45:00")
+Elect.test_TF <- window(Elect, start = "2010-02-11 01:15:00", end = "2010-02-17 23:45:00")
+
+Elect_WOOT_D_Auto.Arima_FT <- auto.arima(ts(Elect.train_TF[,"Power_(kW)"]), xreg= fourier(ts(Elect.train_TF[,"Power_(kW)"], frequency= 96), K=4))
+
+checkresiduals(Elect_WOOT_D_Auto.Arima_FT)
+```
+
+```{r }
+ggPacf(Elect_WOOT_D_Auto.Arima_FT$residuals)
+```
+
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOOT_D_auto.arima_FT_forcast <- forecast::forecast(Elect_WOOT_D_Auto.Arima_FT, xreg= 
+                                  fourier(ts(Elect.test_TF[,"Power_(kW)"], frequency= 96), K=4, h=672))
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(ts(Elect_WOOT_D_auto.arima_FT_forcast$mean, frequency = 96, start = c(42, 1)), series='Auto SARIMA with Fourier')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+```{r}
+Elect_WOOT_D_auto.arima_FT_RMSE <-sqrt(mean(as.numeric(ts(Elect_WOOT_D_auto.arima_FT_forcast$mean, frequency = 96, start = c(42, 1))-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOOT_D_auto.arima_FT_AIC = Elect_WOOT_D_Auto.Arima_FT$aicc
+
+cat("The RMSE of Auto SARIMA model with Fourrier Transformation equale to:", Elect_WOOT_D_auto.arima_FT_RMSE, "\n")
+cat("The AIC of Auto SARIMAl with Fourrier Transformation equale to:", Elect_WOOT_D_auto.arima_FT_AIC, "\n")
+
+```
+When we add a Fourier Transformation to Auto SARIMA Model, the residuals seems become good (Ljung-Box test =0.34 > 0.05), but we see that we have a problem of over fitting because the RMSE on the Test Set get bigger. 
+
+### II-1-3- Forecasting Manuel SARIMA Model:
+#### II-1-3-1- Forecasting Manuel SARIMA Model:
+
+The first step here is to solve the problem of seasonality. 
+The electricity consumption (kW) time series has a daily seasonality (96). We try to do a diff with lag=96 to this time series to remove the daily seasonality.
+
+
+```{r}
+checkresiduals(Elect_D.ts.train[,"Power_(kW)"])
+```
+```{r}
+ggPacf(Elect_D.ts.train[,"Power_(kW)"])
+```
+
+
+```{r}
+Elect_WOOT_D.diff <- diff(Elect_D.ts.train[,"Power_(kW)"] ,lag = 96, differences = 1)
+```
+
+```{r}
+checkresiduals(Elect_WOOT_D.diff)
+```
+
+```{r}
+par(mfrow=c(2,2))
+autoplot(Elect_WOOT_D.diff)
+ggseasonplot(Elect_WOOT_D.diff)
+ggAcf(Elect_WOOT_D.diff)
+ggPacf(Elect_WOOT_D.diff)
+```
+
+When we apply a diff on the time series with lag =96, we see that we have an ACF that decrease quickly but there is always a pic on lag 96. We can start with seasonal =(0,1,0) in SARIMA function.
+We see also on a significant PACF at lag=5. So, we can start with AR5, order=c(5,0,0).
+
+
+```{r}
+Elect_WOOT_D_Arima=Arima(Elect_D.ts.train[,"Power_(kW)"], order=c(5,1,0), seasonal=c(0,1,0))
+checkresiduals(Elect_WOOT_D_Arima)
+```
+
+```{r}
+ggPacf(Elect_WOOT_D_Arima$residuals)
+```
+
+The correspondent residuals are still correlated. We see on the ACF and PACF that we have a significant ACF at lag=96 and significant PACF at lag 8. Thus, we can make the seasonal=(0,1,1) and order=(5,1,8)
+
+
+```{r}
+Elect_WOOT_D_Arima_2=Arima(Elect_D.ts.train[,"Power_(kW)"], order=c(5,1,8), seasonal=c(0,1,1))
+checkresiduals(Elect_WOOT_D_Arima_2)
+```
+
+```{r}
+ggPacf(Elect_WOOT_D_Arima_2$residuals)
+```
+Here we can see that the residuals of this SARIMA model look better. They are not totally uncorrelated but the correlation is less than before. 
+
+Let's look on the forecast on the test set and the RMSE.
+
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOOT_D_Arima_2_forcast <- forecast::forecast(Elect_WOOT_D_Arima_2, h=672)
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(Elect_WOOT_D_Arima_2_forcast$mean, series='SARIMA (5,1,8)(0,1,1)[96]]')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+
+```{r}
+Elect_WOOT_D_Arima_2_RMSE <- sqrt(mean((Elect_WOOT_D_Arima_2_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOOT_D_Arima_2_AIC = Elect_WOOT_D_Arima$aicc
+
+cat("The RMSE of SARIMA (5,1,8)(0,1,1)[96] model  equal to:", Elect_WOOT_D_Arima_2_RMSE, "\n")
+cat("The AIC of SARIMA (5,1,8)(0,1,1)[96] model  equal to:", Elect_WOOT_D_Arima_2_AIC, "\n")
+
+```
+The RMSE on the test set is better that shows that we have less over fitting. 
+
+#### II-1-3-2- Forecasting Manuel SARIMA Model with Box-Cox transformation :
+
+Lets see what's happen when we add a Box-Cox transformation to the SARIMA Model.
+
+```{r}
+Elect_WOOT_D_Arima_2_BC=Arima(Elect_D.ts.train[,"Power_(kW)"], order=c(5,1,8), seasonal=c(0,1,1), lambda = "auto")
+checkresiduals(Elect_WOOT_D_Arima_2_BC)
+```
+
+```{r}
+ggtsdisplay(Elect_WOOT_D_Arima_2_BC$residuals)
+```
+Whith the Box-Cox transformation, the residuals seems better but stay have some correlation. The Ljung-Box test gives a P-value equal to 0.015 which is < 0.05 but better then the models already seen.
+
+Lets take a look on the forecast and the RMSE with SARIMA and Box-Cox transformation.
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOOT_D_Arima_2_BC_forcast <- forecast::forecast(Elect_WOOT_D_Arima_2_BC, h=672)
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(Elect_WOOT_D_Arima_2_BC_forcast$mean, series='SARIMA (5,1,8)(0,1,1)[96] With Box-Cox')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (hour)') +
+  ylab('Time (day)')
+```
+
+
+
+```{r}
+Elect_WOOT_D_Arima_BC_RMSE <- sqrt(mean((Elect_WOOT_D_Arima_2_BC_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOOT_D_Arima_BC_AIC = Elect_WOOT_D_Arima_2_BC$aicc
+
+cat("The RMSE of SARIMA (5,1,8)(0,1,1)[96] model with Box-Cox transformation equal to:", Elect_WOOT_D_Arima_BC_RMSE, "\n")
+cat("The AIC of SARIMA (5,1,8)(0,1,1)[96] model with Box-Cox transformation equal to:", Elect_WOOT_D_Arima_BC_AIC, "\n")
+
+```
+The forecast and the RMSE with Box-Cox seem the same as the SARIMA model without Box-Cox transformation.
+
+
+
+#### II-1-3-3- Forecasting Manuel SARIMA Model with Fourrier transformation :
+
+What will be the result if we add a Fourier transformation to the SARIMA Model.
+
+```{r}
+Elect_WOOT_D_Arima_FT <- Arima(ts(Elect.train_TF[,"Power_(kW)"]), order=c(5,1,8), seasonal=c(0,1,1), xreg= 
+                                  fourier(ts(Elect.train_TF[,"Power_(kW)"], frequency= 96), K=4))
+```
+
+
+```{r}
+checkresiduals(Elect_WOOT_D_Arima_FT, lag.max=192)
+```
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOOT_D_Arima_FT_forcast <- forecast::forecast(Elect_WOOT_D_Arima_FT, xreg= 
+                                  fourier(ts(Elect.test_TF[,"Power_(kW)"], frequency= 96), K=4, h=672))
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(ts(Elect_WOOT_D_Arima_FT_forcast$mean, frequency = 96, start = c(42, 1)), series='SARIMA (5,1,8)(0,1,1)[96] with Fourrier')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+
+```{r}
+Elect_WOOT_D_Arima_FT_RMSE <- sqrt(mean(as.numeric(ts(Elect_WOOT_D_Arima_FT_forcast$mean, frequency = 96, start = c(42, 1))-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOOT_D_Arima_FT_AIC = Elect_WOOT_D_Arima_FT$aicc
+
+cat("The RMSE of SARIMA (5,1,8)(0,1,1)[96] model with Fourier transformation equal to:", Elect_WOOT_D_Arima_FT_RMSE, "\n")
+cat("The AIC of SARIMA (5,1,8)(0,1,1)[96] model with Fourier transformation equal to:", Elect_WOOT_D_Arima_FT_AIC, "\n")
+
+```
+We can see that Fourier transformation has a negative impact on the SARIMA model because the residuals of the SARIMA model with Fourier transformation are very correlated and the RMSE on the test set is worse (over fitting more present here). 
+
+### II-1-4- Forecasting with Neural Network:
+#### II-1-4-1- Forecasting with Neural Network:
+
+```{r}
+Elect_WOOT_D_NN=nnetar(Elect_D.ts.train[,"Power_(kW)"])
+checkresiduals(Elect_WOOT_D_NN)
+```
+
+With Neural Network AutoRegressive, we get a model with residuals very correlated. 
+
+What about the forecast and the RMSE with Neural Network AutoRegressiv model?
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOOT_D_NN_forcast <- forecast::forecast(Elect_WOOT_D_NN, h=672)
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(Elect_WOOT_D_NN_forcast$mean, series='Neural Network Model')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+
+```{r}
+Elect_WOOT_D_NN_RMSE <- sqrt(mean((Elect_WOOT_D_NN_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOOT_D_NN_AIC = Elect_WOOT_D_NN$aicc
+
+cat("The RMSE of Neural Network model equal to:", Elect_WOOT_D_NN_RMSE, "\n")
+cat("The AIC of Neural Network model equal to:", Elect_WOOT_D_NN_AIC, "\n")
+
+```
+We can see that the forecast using Neural Network AutoRegressiv model are not good and the RMSE on the test set confirm that because the RMSE is so high and shows the presence of over fitting.
+
+
+#### II-1-4-2- Forecasting with Neural Network and Box-Cox transformation:
+
+
+```{r}
+Elect_WOOT_D_NN_BC=nnetar(Elect_D.ts.train[,"Power_(kW)"], lambda='auto')
+```
+
+```{r}
+checkresiduals(Elect_WOOT_D_NN_BC$residuals)
+```
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOOT_D_NN_BC_forcast <- forecast::forecast(Elect_WOOT_D_NN_BC, h=672)
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(Elect_WOOT_D_NN_BC_forcast$mean, series='Neural Network Model with Box-Cox')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+```{r}
+Elect_WOOT_D_NN_BC_RMSE <- sqrt(mean((Elect_WOOT_D_NN_BC_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOOT_D_NN_BC_AIC = Elect_WOOT_D_NN_BC$aicc
+
+cat("The RMSE of Neural Network model with Box-Cox transformation equal to:", Elect_WOOT_D_NN_BC_RMSE, "\n")
+cat("The AIC of Neural Network model with Box-Cox transformation equal to:", Elect_WOOT_D_NN_BC_AIC, "\n")
+
+```
+When we add a Cox-Box transformation to NNAR model, the result don't change a lot and the model still have residuals that are noisy and an over fitting problem.
+
+
+### II-1-5- Ploting all the models
+
+```{r fig.height = 4, fig.width = 7, fig.align='center'}
+autoplot(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D_hw_forecast$mean, series='HW with Additive Seasonal') +
+  autolayer(Elect_WOOT_D_auto.arima_forcast$mean, series='Auto SARIMA') +
+  autolayer(Elect_WOOT_D_auto.arima_BC_forcast$mean, series='Auto SARIMA with Box-Cox') +
+  autolayer(ts(Elect_WOOT_D_auto.arima_FT_forcast$mean, frequency = 96, start = c(42, 1)), series='Auto SARIMA with Fourier')+
+  autolayer(Elect_WOOT_D_Arima_2_forcast$mean, series='SARIMA (5,1,8)(0,1,1)[96]') +
+  autolayer(Elect_WOOT_D_Arima_2_BC_forcast$mean, series='SARIMA (5,1,8)(0,1,1)[96] with Box-Cox') +
+  autolayer(ts(Elect_WOOT_D_Arima_FT_forcast$mean, frequency = 96, start = c(42, 1)), series='SARIMA (5,1,8)(0,1,1)[96] with Fourier')+
+  autolayer(Elect_WOOT_D_NN_forcast$mean, series='Neural Network Model') +
+  autolayer(Elect_WOOT_D_NN_BC_forcast$mean, series='Neural Network With Box-Cox')+
+  #autolayer(Elect_WOOT_D_TBATS_forcast$mean, series='TBATS Model')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+
+### II-1-6- Comparison of the RMSE, AIC and Ljung Box test
+
+```{r}
+results <- data.frame(
+  Model_without_covariate = c("Holt Winters Model (Additive Seasonality)","Holt Winters Model (Multiplicative Seasonality)", "Auto SARIMA Model ", "Auto SARIMA Model with Box-Cox transformation", "Auto SARIMA Model with Fourrier transformation", "SARIMA Model (5,1,8)(0,1,1)[96]')","SARIMA Model (5,1,8)(0,1,1)[96] with Box-Cox Transformation" ,"SARIMA Model (5,1,8)(0,1,1)[96] with Fourrier Transformation", "Neural Network Model", "Neural Network Model with Box-Cox Transformation"),
+  RMSE = c(Elect_WOOT_hw_RMSE, Elect_WOOT_D_hw_MS_RMSE, Elect_WOOT_D_auto.arima_RMSE, Elect_WOOT_D_auto.arima_BC_RMSE, Elect_WOOT_D_auto.arima_FT_RMSE, Elect_WOOT_D_Arima_2_RMSE, Elect_WOOT_D_Arima_BC_RMSE, Elect_WOOT_D_Arima_FT_RMSE, Elect_WOOT_D_NN_RMSE, Elect_WOOT_D_NN_BC_RMSE),
+  AICC = c("-","-", Elect_WOOT_D_auto.arima_AIC, Elect_WOOT_D_auto.arima_BC_AIC, Elect_WOOT_D_auto.arima_FT_AIC, Elect_WOOT_D_Arima_2_AIC, Elect_WOOT_D_Arima_BC_AIC, Elect_WOOT_D_Arima_FT_AIC,"-", "-"),
+  Ljung_Box_test = c("-","-","2.2e-16","2.2e-16","2.2e-16",0.005407,0.01437,"8.325e-10","-","-")
+  
+)
+
+results
+```
+
+
+
+
+
+
+## II-2- Fitting Electricity Consumption (kW) models with using outdoor temperature: (with covariate)
+
+Now, we will try to fit a time series model for the Electricity consumption time series with Temperature as covariate. We will do the same job as the analyse without covariate.
+
+### II-2-1- Forecasting with exponential smoothing with covariate
+#### II-2-1-1- Holt Winters with Additive Seasonality
+#### II-2-1-2- Holt Winters with Multiplicative Seasonality
+
+As we have a high frequency time series (frequency = 96), the "hw" function don't work for such time series (hw needs a time series with a frequency less then 24). For this reason, we have used "HoltWinters" function to deal with the high frequency problem.
+
+But, the limit of "HoltWinters" function is that it don't accept a covariate (xreg is not accepted in "HoltWinters" function in R).
+
+Thus, we will not fit Holt Winters models for the Electricity consumption time series with Temperature as covariate.
+
+
+### II-2-2- Forecasting Auto SARIMA Model with covariate
+
+#### II-2-2-1- Forecasting Auto SARIMA Model with covariate
+
+
+```{r fig.align='left'}
+Elect_WOT_D_auto.arima <- auto.arima(Elect_D.ts.train[,"Power_(kW)"], xreg= Elect_D.ts.train[,"Temp_(C°)"])
+checkresiduals(Elect_WOT_D_auto.arima)
+```
+
+```{r}
+ggPacf(Elect_WOT_D_auto.arima$residuals)
+```
+
+
+
+
+```{r fig.height = 3.5, fig.width = 7, fig.align='center'}
+Elect_WOT_D_auto.arima_forcast <- forecast :: forecast(Elect_WOT_D_auto.arima , xreg= Elect_D.ts.test[,"Temp_(C°)"] , h=672)
+
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series='Temperature') +
+  autolayer(Elect_WOT_D_auto.arima_forcast$mean, series='Auto SARIMA with Covariate')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+
+```
+
+
+```{r}
+Elect_WOT_D_auto.arima_RMSE <- sqrt(mean((Elect_WOT_D_auto.arima_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOT_D_auto.arima_AIC = Elect_WOT_D_auto.arima$aicc
+
+cat("The RMSE of Auto SARIMA model with Covariate equal to:", Elect_WOT_D_auto.arima_RMSE, "\n")
+cat("The AIC of Auto SARIMA model with Covariate equal to:", Elect_WOT_D_auto.arima_AIC, "\n")
+
+```
+When we use auto arime function for the electricity consumption with covariate, the choses model is ARIMA(1,0,0)(0,1,0)[96].
+The residuals of this model are noisy because they are autocorrelated and not independent (Ljung-Box test P-value <<<<< 0.05).
+Also, the RMSE of this model on a test set is not so good.
+
+#### II-2-2-2- Forecasting Auto SARIMA Model with covariate and Cox-Box transformation
+
+Let's try to add a Box-Cox transformation to the auta arima model to see if we get a better model.
+
+```{r}
+Elect_WOT_D_auto.arima_BC <- auto.arima(Elect_D.ts.train[,"Power_(kW)"], xreg= Elect_D.ts.train[,"Temp_(C°)"], lambda = "auto")
+checkresiduals(Elect_WOT_D_auto.arima_BC)
+```
+
+```{r}
+ggPacf(Elect_WOT_D_auto.arima_BC$residuals)
+```
+
+
+
+```{r fig.height = 3.5, fig.width = 7, fig.align='center'}
+Elect_WOT_D_auto.arima_BC_forcast <- forecast :: forecast(Elect_WOT_D_auto.arima_BC , xreg= Elect_D.ts.test[,"Temp_(C°)"] , h=672)
+
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series='Temperature') +
+  autolayer(Elect_WOT_D_auto.arima_BC_forcast$mean, series='Auto SARIMA with Covariate and Box-Cox')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+
+```
+
+
+```{r}
+Elect_WOT_D_auto.arima_BC_RMSE <- sqrt(mean((Elect_WOT_D_auto.arima_BC_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOT_D_auto.arima_BC_AIC = Elect_WOT_D_auto.arima_BC$aicc
+
+cat("The RMSE of Auto SARIMA model with Covariate and Box-Cox transformation equale to:", Elect_WOT_D_auto.arima_BC_RMSE, "\n")
+cat("The AIC of Auto SARIMA model with Covariate and Box-Cox transformation equale to:", Elect_WOT_D_auto.arima_BC_AIC, "\n")
+
+```
+With a Box-Cox transformation in auto arima model, we don"t see any change comparing to the first auto arima model. We still have the problem of noisy residuals and RMSE not so good.
+
+
+
+#### II-2-2-3- Forecasting Auto SARIMA Model with covariate and Fourier transformation
+
+What will be the result if we add a Fourier transformation to auto arima model?
+
+```{r}
+Elect_WOT_D_auto.arima_FT <- auto.arima(ts(Elect.train_TF[,"Power_(kW)"]),  xreg= cbind(Elect_D.ts.train[,"Temp_(C°)"],fourier(ts(Elect.train_TF[,"Power_(kW)"], frequency= 96), K=6)) )
+
+checkresiduals(Elect_WOT_D_auto.arima_FT)
+```
+
+
+
+```{r}
+ggPacf(Elect_WOT_D_auto.arima_FT$residuals, lag.max = 192)
+```
+
+
+```{r fig.height = 3.5, fig.width = 7, fig.align='center'}
+Elect_WOT_D_auto.arima_FT_forcast <- forecast :: forecast(Elect_WOT_D_auto.arima_FT, xreg= cbind(Elect_D.ts.test[,"Temp_(C°)"], fourier(ts(Elect.test_TF[,"Power_(kW)"], frequency= 96), K=6, h=672)))
+
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series='Temperature') +
+  autolayer(ts(Elect_WOT_D_auto.arima_FT_forcast$mean,frequency = 96, start = c(42, 1)), series='Auto SARIMA with Covariate and Fourier')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+
+```
+
+
+```{r}
+Elect_WOT_D_auto.arima_FT_RMSE <- sqrt(mean(as.numeric(ts(Elect_WOT_D_auto.arima_FT_forcast$mean, frequency = 96, start = c(42, 1))-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOT_D_auto.arima_FT_AIC = Elect_WOT_D_auto.arima_FT$aicc
+
+cat("The RMSE of Auto SARIMA model with Covariate and Fourier transformation equal to:", Elect_WOT_D_auto.arima_FT_RMSE, "\n")
+cat("The AIC of Auto SARIMA model with Covariate and Fourier transformation equal to:", Elect_WOT_D_auto.arima_FT_AIC, "\n")
+
+```
+The Fourier transformation in auto arima model has a positive impact on the independence of the residuals because now we have significant Ljung-Box test P-value (0.056 > 0.05) but the residuals show a small autocorrelation in the ACF and PACF.
+But, with a Fourier transformation in auto arima model, the RMSE on test set is worse and the over fitting problem is more present here.
+
+
+### II-2-3- Forecasting Time Series Linear Model
+
+In this section, we try to modeling a Manuel SARIMA.
+
+For that, we start by looking for the relation between the electricity consumption and the temperature.
+
+```{r fig.height = 4, fig.width = 7, fig.align='center'}
+plot(Elect_D.ts.train[,"Power_(kW)"],Elect_D.ts.train[,"Temp_(C°)"])
+```
+
+```{r}
+data <- read_excel("./Elec-train.xlsx")
+data <- data[2:3932,]
+data$Times = as.POSIXct(data$Timestamp, format="%m/%d/%Y %H:%M")
+data$weekday <- weekdays(data$Times)
+data$hour <- as.numeric(format(data$Times, "%H"))
+data <- transform(data,workday=ifelse(data$weekday %in% c("samedi","dimanche"),0,1))
+data <- transform(data,day_night=ifelse(data$hour <=8 & data$hour>0 ,0,1))
+```
+
+
+```{r}
+Elect_WOT_D.train_tslm <- cbind(Consumption = Elect_D.ts.train[,"Power_(kW)"],
+                                            Square_Consumption = Elect_D.ts.train[,"Power_(kW)"]**2,
+                                            Temperature = Elect_D.ts.train[,"Temp_(C°)"],
+                                            Square_Temperature = Elect_D.ts.train[,"Temp_(C°)"]**2,
+                                            workday = data$workday,
+                                            Day_Night = data$day_night
+                                            )
+```
+
+Here, we use tslm function to to fit a linear model for this time series with variables like Square_Consumption, Temperature, Square_Temperature, workday, Day_Night, trend and seasonal.
+
+The idea is to fit different models with differents variables and the select the better Linear model.
+
+
+```{r}
+Elect_WOT_D_tslm_fit <- tslm(Consumption~Square_Consumption+Square_Temperature+trend+season, data=Elect_WOT_D.train_tslm)
+
+```
+
+```{r}
+Elect_WOT_D_tslm_fit_1 <- tslm(Consumption~Square_Consumption+Temperature+Square_Temperature+trend+season, data=Elect_WOT_D.train_tslm)
+```
+
+```{r}
+Elect_WOT_D_tslm_fit_2 <- tslm(Consumption~Square_Consumption+Temperature+Square_Temperature+workday+trend+season, data=Elect_WOT_D.train_tslm)
+```
+
+```{r}
+Elect_WOT_D_tslm_fit_3 <- tslm(Consumption~Square_Consumption+Temperature+Square_Temperature+workday+Day_Night+trend+season, data=Elect_WOT_D.train_tslm)
+```
+
+We compare the models using CV function to get a comparaison of the principal 
+
+```{r}
+CV(Elect_WOT_D_tslm_fit)
+CV(Elect_WOT_D_tslm_fit_1)
+CV(Elect_WOT_D_tslm_fit_2)
+CV(Elect_WOT_D_tslm_fit_3)
+```
+From the results above, we see that the "Elect_WOT_D_tslm_fit_2" and "Elect_WOT_D_tslm_fit_3" models are the best. 
+We select "Elect_WOT_D_tslm_fit_2" because it has less variables (it is simpal comparing with the second one).
+
+
+```{r}
+summary(Elect_WOT_D_tslm_fit_2)
+```
+
+We see here that all used variables are significante.
+
+now, we take a look on the residuals of this linear model.
+
+```{r}
+checkresiduals(Elect_WOT_D_tslm_fit_2)
+```
+
+
+```{r}
+par(mfrow=c(1,2))
+ggAcf(Elect_WOT_D_tslm_fit_2$residuals)
+ggPacf(Elect_WOT_D_tslm_fit_2$residuals)
+```
+From the ACF, we see a seasonalit and from the PACF we wee a significant PACF at lag = 5.
+
+So, we can start to fit these residuals with (5,0,0)(0,1,0) model.
+
+
+```{r}
+fit_tslm_residuals=Arima(Elect_WOT_D_tslm_fit_2$residuals,order=c(5,0,0), seasonal = c(0,1,0))
+checkresiduals(fit_tslm_residuals)
+```
+
+
+```{r}
+ggPacf(fit_tslm_residuals$residuals)
+```
+7.441e-05 fit_tslm_residuals_1=Arima(Elect_WOT_D_tslm_fit_2$residuals,order=c(5,0,12), seasonal = c(0,1,1))
+```{r}
+fit_tslm_residuals_1=Arima(Elect_WOT_D_tslm_fit_2$residuals,order=c(5,0,12), seasonal = c(0,1,1))
+checkresiduals(fit_tslm_residuals_1)
+```
+
+Form the ACF we can see that a pic at lag 96 still present and from the PACF, we see a significant PACF at lag 12.
+We can try this model (5,1,12)(0,1,1) to fit these residuals
+
+```{r}
+fit_tslm_residuals_2=Arima(Elect_WOT_D_tslm_fit_2$residuals,order=c(5,1,12), seasonal = c(0,1,1))
+checkresiduals(fit_tslm_residuals_2)
+```
+
+
+Now we can see less autocorrelation and the Ljung-Box test P-value is bigger than befor. It's not perfect but we can start to fit a manuel SARIMA for the electricity consumption time series with covariate with the model (5,1,12)(0,1,1).
+
+### II-2-4- Forecasting Manuel SARIMA Model with covariate
+
+#### II-2-4-1- Forecasting Manuel SARIMA Model with covariate
+
+```{r}
+Elect_WOT_D_Arima <- Arima(Elect_D.ts.train[,"Power_(kW)"], order=c(5,1,12),  seasonal=c(0,1,1), xreg= Elect_D.ts.train[,"Temp_(C°)"])
+
+```
+```{r fig.align='left'}
+checkresiduals(Elect_WOT_D_Arima)
+```
+
+```{r}
+ggAcf(Elect_WOT_D_Arima$residuals)
+ggPacf(Elect_WOT_D_Arima$residuals)
+```
+The ACF and PACF whow less autocorrelation and Ljung-Box test P-value is better (0.004). This model is not perfect but it seems better than the others models.
+
+Now, we look at the RMSE.
+
+```{r fig.height = 3.5, fig.width = 7, fig.align='center'}
+Elect_WOT_D_Arima_forcast <- forecast :: forecast(Elect_WOT_D_Arima , xreg= Elect_D.ts.test[,"Temp_(C°)"] , h=672)
+
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series='Temperature') +
+  autolayer(Elect_WOT_D_Arima_forcast$mean, series=' SARIMA Model with Covariate (5,1,12)(0,1,1)[96]')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+
+```
+
+```{r}
+Elect_WOT_D_Arima_RMSE <- sqrt(mean((Elect_WOT_D_Arima_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOT_D_Arima_AIC = Elect_WOT_D_Arima$aicc
+
+cat("The RMSE of SARIMA Model with Covariate (5,1,12)(0,1,1)[96] equal to:", Elect_WOT_D_Arima_RMSE, "\n")
+cat("The AIC of SARIMA Model with Covariate (5,1,12)(0,1,1)[96] equal to:", Elect_WOT_D_Arima_AIC, "\n")
+
+```
+The RMSE on a test set is better then before. 
+
+#### II-2-4-2- Forecasting Manuel SARIMA Model with covariate and Cox-Box transformation
+
+```{r}
+Elect_WOT_D_Arima_BC <- Arima(Elect_D.ts.train[,"Power_(kW)"], order=c(5,1,12),  seasonal=c(0,1,1), xreg= Elect_D.ts.train[,"Temp_(C°)"], lambda = "auto")
+
+```
+
+```{r fig.align='left'}
+checkresiduals(Elect_WOT_D_Arima_BC)
+```
+
+
+
+```{r}
+ggAcf(Elect_WOT_D_Arima_BC$residuals)
+ggPacf(Elect_WOT_D_Arima_BC$residuals)
+```
+
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOT_D_Arima_BC_forcast <- forecast :: forecast(Elect_WOT_D_Arima_BC , xreg= Elect_D.ts.test[,"Temp_(C°)"] , h=672)
+
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series='Temperature') +
+  autolayer(Elect_WOT_D_Arima_BC_forcast$mean, series=' SARIMA Model with Covariate (5,0,12)(0,1,1)[96] and Box-Cox')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+
+```
+
+
+```{r}
+Elect_WOT_D_Arima_BC_RMSE <- sqrt(mean((Elect_WOT_D_Arima_BC_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOT_D_Arima_BC_AIC = Elect_WOT_D_Arima_BC$aicc
+
+cat("The RMSE of SARIMA Model with Covariate (5,1,12)(0,1,1)[96] and Box-Cox Transformation equal to:", Elect_WOT_D_Arima_BC_RMSE, "\n")
+cat("The AIC of SARIMA Model with Covariate (5,1,12)(0,1,1)[96] and Box-Cox Transformation equal to:", Elect_WOT_D_Arima_BC_AIC, "\n")
+
+```
+
+
+When we add a Box-Cox transformation to the SARIMA model the result get better. We have nowe less autocorrelation between residuals and the Ljung-Box test P-value is significante at 90% (alpha = 10%).
+
+Also, the RMSE on a test set is the smallest comparing with previous models.
+
+
+
+#### II-2-4-3- Forecasting Manuel SARIMA Model with covariate and Fourrier transformation
+
+```{r}
+Elect_WOT_D_Arima_FT <- Arima(ts(Elect.train_TF[,"Power_(kW)"]), order=c(5,1,12),  seasonal=c(0,0,0),  xreg= cbind(Elect_D.ts.train[,"Temp_(C°)"], fourier(ts(Elect.train_TF[,"Power_(kW)"],  frequency= 96), K=6)) )
+```
+
+```{r fig.align='left'}
+checkresiduals(Elect_WOT_D_Arima_FT)
+```
+
+
+```{r}
+ggAcf(Elect_WOT_D_Arima_FT$residuals, lag.max = 192)
+ggPacf(Elect_WOT_D_Arima_FT$residuals, lag.max = 192)
+```
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOT_D_Arima_FT_forcast <- forecast :: forecast(Elect_WOT_D_Arima_FT , xreg= cbind(Elect_D.ts.test[,"Temp_(C°)"], fourier(ts(Elect.test_TF[,"Power_(kW)"],  frequency= 96), K=6, h=672)))
+
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series='Temperature') +
+  autolayer(ts(Elect_WOT_D_Arima_FT_forcast$mean, frequency = 96, start = c(42, 1)), series=' SARIMA Model with Covariate (5,1,12)(0,1,1)[96] and Fourier')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+
+```
+
+
+```{r}
+Elect_WOT_D_Arima_FT_RMSE <- sqrt(mean((ts(Elect_WOT_D_Arima_FT_forcast$mean, frequency = 96, start = c(42, 1))-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOT_D_Arima_FT_AIC = Elect_WOT_D_Arima_FT$aicc
+
+cat("The RMSE of SARIMA Model with Covariate (5,1,12)(0,1,1)[96] and Fourier Transformation equal to:", Elect_WOT_D_Arima_FT_RMSE, "\n")
+cat("The AIC of SARIMA Model with Covariate (5,1,12)(0,1,1)[96] and Fourier Transformation equal to:", Elect_WOT_D_Arima_FT_AIC, "\n")
+
+```
+
+The Fourier transformation didn't add a positive effect on the SARIMA model.
+
+
+### II-2-5- Forecastring NNAR model with covariates
+#### II-2-5-1- Forecastring NNAR model with covariates
+
+```{r}
+Elect_WOT_D_nnetar <- nnetar(Elect_D.ts.train[,"Power_(kW)"], xreg= Elect_D.ts.train[,"Temp_(C°)"])
+checkresiduals(Elect_WOT_D_nnetar)
+```
+
+```{r}
+ggPacf(Elect_WOT_D_nnetar$residuals)
+```
+
+
+```{r fig.height = 3.5, fig.width = 6, fig.align='center'}
+Elect_WOT_D_nnetar_forcast <- forecast :: forecast(Elect_WOT_D_nnetar , xreg= Elect_D.ts.test[,"Temp_(C°)"] , h=672)
+
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series='Temperature') +
+  autolayer(Elect_WOT_D_nnetar_forcast$mean, series=' NN Model with Covariate')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+
+```
+
+
+```{r}
+Elect_WOT_D_NN_RMSE <- sqrt(mean((Elect_WOT_D_nnetar_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOT_D_NN_AIC = Elect_WOT_D_nnetar$aicc
+
+cat("The RMSE of Neural Network with Covariate equale to:", Elect_WOT_D_NN_RMSE, "\n")
+cat("The AIC of Neural Network Model with Covariate equale to:", Elect_WOT_D_NN_AIC, "\n")
+
+```
+
+The NNAR model shows a noisy residuals and a very bad RMSE.
+
+
+#### II-2-5-2- Forecastring NNAR model with covariates and Box-Cox Transformation
+
+
+```{r}
+Elect_WOT_D_nnetar_BC <- nnetar(Elect_D.ts.train[,"Power_(kW)"], xreg= Elect_D.ts.train[,"Temp_(C°)"], lambda = "auto")
+checkresiduals(Elect_WOT_D_nnetar_BC$residuals)
+```
+
+```{r}
+ggPacf(Elect_WOT_D_nnetar_BC$residuals)
+```
+
+
+```{r fig.height = 3.5, fig.width = 6, fig.align='center'}
+Elect_WOT_D_nnetar_BC_forcast <- forecast :: forecast(Elect_WOT_D_nnetar_BC , xreg= Elect_D.ts.test[,"Temp_(C°)"] , h=672)
+
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series='Temperature') +
+  autolayer(Elect_WOT_D_nnetar_BC_forcast$mean, series=' NN Model with Covariate and Box-Cox')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+
+```
+
+
+```{r}
+Elect_WOT_D_NN_BC_RMSE <- sqrt(mean((Elect_WOT_D_nnetar_BC_forcast$mean-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOT_D_NN_BC_AIC = Elect_WOT_D_nnetar_BC$aicc
+
+cat("The RMSE of Neural Network with Covariate and Box-Cox Transformation equale to:", Elect_WOT_D_NN_BC_RMSE, "\n")
+cat("The AIC of Neural Network Model with Covariate and Box-Cox Transformation equale to:", Elect_WOT_D_NN_BC_AIC, "\n")
+
+```
+The NNAR model with Box-Cox transformation is almost the same as the NNAR without BOX-Cox transformation. This model is not good since the residuals are noisy ans RMSE is bad.
+
+
+
+
+
+
+
+### II-2-6- Ploting all the models
+
+```{r fig.height = 4, fig.width = 7, fig.align='center'}
+autoplot(Elect_D.ts.test[,"Power_(kW)"], series='Test set') +
+  autolayer(Elect_D.ts.test[,"Temp_(C°)"], series='Temperature') +
+
+  autolayer(Elect_WOT_D_auto.arima_forcast$mean, series='Auto SARIMA with Covariate')+
+  autolayer(Elect_WOT_D_auto.arima_BC_forcast$mean, series='Auto SARIMA with Covariate and Box-Cox')+
+  autolayer(ts(Elect_WOT_D_auto.arima_FT_forcast$mean,frequency = 96, start = c(42, 1)), series='Auto SARIMA with Covariate and Fourrier')+
+  autolayer(Elect_WOT_D_Arima_forcast$mean, series=' SARIMA Model with Covariate (5,1,12)(0,1,1)[96]')+
+  autolayer(Elect_WOT_D_Arima_BC_forcast$mean, series=' SARIMA Model with Covariate (5,0,12)(0,1,1)[96] and Box-Cox')+
+  autolayer(ts(Elect_WOT_D_Arima_FT_forcast$mean, frequency = 96, start = c(42, 1)), series=' SARIMA Model with Covariate (5,1,12)(0,1,1)[96] and Fourrier')+
+  autolayer(Elect_WOT_D_nnetar_forcast$mean, series=' Neural Network Model with Covariate')+
+  autolayer(Elect_WOT_D_nnetar_BC_forcast$mean, series=' Neural Network Model with Covariate and Box-Cox')+
+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+
+### II-2-7- Comparison of the RMSE, AIC and Ljung Box test
+
+```{r}
+results_Covariat <- data.frame(
+  Model_without_covariate = c("Holt Winters Model with Covariate (Additive Seasonality)","Holt Winters Model with Covariate (Multiplicative Seasonality)", "Auto SARIMA Model with Covariate ", "Auto SARIMA Model with Covariate and Box-Cox transformation", "Auto SARIMA Model with Covariate and Fourrier transformation", "SARIMA Model with Covariate (5,1,12)(0,1,1)[96]')", "SARIMA Model with Covariate (5,1,12)(0,1,1)[96][4] and Box-Cox Transformation" ,"SARIMA Model with Covariate (5,1,12)(0,1,1)[96] and Fourrier Transformation", "Neural Network Model", "Neural Network Model with Box-Cox Transformation", "TBATS Model"),
+  RMSE = c("-", "-", Elect_WOT_D_auto.arima_RMSE, Elect_WOT_D_auto.arima_BC_RMSE, Elect_WOT_D_auto.arima_FT_RMSE, Elect_WOT_D_Arima_RMSE,  Elect_WOT_D_Arima_BC_RMSE, Elect_WOT_D_Arima_FT_RMSE, Elect_WOT_D_NN_RMSE, Elect_WOT_D_NN_BC_RMSE, "-"),
+  AICC = c("-","-", Elect_WOT_D_auto.arima_AIC, Elect_WOT_D_auto.arima_BC_AIC, Elect_WOT_D_auto.arima_FT_AIC, Elect_WOT_D_Arima_AIC, Elect_WOT_D_Arima_BC_AIC, Elect_WOT_D_Arima_FT_AIC, "-", "-", "-"),
+  Ljung_Box_test = c("-","-","2.2e-16","2.2e-16",0.05696, 0.0009174,0.01107 ,"2.2e-16" ,"-","-","-")
+  
+)
+
+results_Covariat
+```
+
+
+
+# II- Double seasonality forecast:
+
+## II-1. Fitting Electricity Consumption (kW) models without using outdoor temperature:
+### II-1-1 Forecast Double Seasonality Holt Winter Model:
+
+```{r}
+Elect_WOOT_D_DSHW = dshw(Elect_WOOT[,"Power_(kW)"], period1=96, period2 = 672, h=672, lambda = 'auto')
+```
+
+```{r}
+checkresiduals(Elect_WOOT_D_DSHW , lag.max=672)
+```
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(ts(Elect_WOOT_D_DSHW$mean, frequency = 96, start=c(42,1)), series='Double Seasonality Holt Winters Model')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+
+```{r}
+Elect_WOOT_D_DSHW_RMSE <- sqrt(mean((as.numeric(Elect_WOOT_D_DSHW$mean) - as.numeric(Elect_D.ts.test[,"Power_(kW)"]))^2))
+Elect_WOOT_D_DSHW_AIC = Elect_WOOT_D_DSHW$aicc
+
+cat("The RMSE of Double Seasonality Holt Winters Model equal to:", Elect_WOOT_D_DSHW_RMSE, "\n")
+cat("The AIC of Double Seasonality Holt Winters Model equal to:", Elect_WOOT_D_DSHW_AIC, "\n")
+
+```
+
+
+### II-1-2. Forecasting BATS model
+
+BATS is a time series model that is useful for handling data with multiple seasonal patterns, i.e., the data that changes over time. The TBATS is preferred over BATS as the Trigonometric seasonality (TBATS) can deal with complex and high frequency.
+
+
+```{r}
+Elect_2S.ts.train <- window(Elect_WOOT_2S, start=c(1,6), end=c(6,576))
+
+Elect_2S.ts.test <- window(Elect_WOOT_2S, start=c(6,577), end=c(7,576))
+```
+
+
+```{r}
+Elect_WOOT_D_S2_BATS = bats(Elect_2S.ts.train[,"Power_(kW)"])
+```
+
+```{r}
+checkresiduals(Elect_WOOT_D_S2_BATS)
+```
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOOT_D_S2_BATS_forcast <- forecast::forecast(Elect_WOOT_D_S2_BATS, h=672)
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set')+
+  autolayer(ts(Elect_WOOT_D_S2_BATS_forcast$mean, frequency=96, start=c(42,1)), series='BATS Model')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+```{r}
+Elect_WOOT_D_S2_BATS_RMSE <- sqrt(mean((Elect_WOOT_D_S2_BATS_forcast$mean-Elect_2S.ts.test[,"Power_(kW)"])^2))
+Elect_WOOT_D_S2_BATS_AIC = Elect_WOOT_D_S2_BATS$aicc
+
+cat("The RMSE of BAST model equal to:", Elect_WOOT_D_S2_BATS_RMSE, "\n")
+cat("The AIC of BAST model equal to:", Elect_WOOT_D_S2_BATS_AIC, "\n")
+
+```
+
+## II-2. Fitting Electricity Consumption (kW) models with using outdoor temperature: (with covariate)
+### II-2-1. Forecasting Manuel SARIMA model
+
+                
+```{r}
+
+Elect_WOT_D_2S_Arima_BC <- Arima(Elect_2S.ts.train[,"Power_(kW)"], order=c(5,1,12), seasonal=list(order=c(0,1,1), period=96), xreg= Elect_2S.ts.train[,"Temp_(C°)"])
+  
+
+```
+
+```{r}
+checkresiduals(Elect_WOT_D_2S_Arima_BC)
+```
+
+
+
+
+
+
+
+
+```{r}
+Elect_WOT_D_2S_Arima_BC_forcast <- forecast::forecast(Elect_WOT_D_2S_Arima_BC , xreg= Elect_2S.ts.test[,"Temp_(C°)"] , h=672)
+```
+
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series='Temperature') +
+  autolayer(ts(Elect_WOT_D_2S_Arima_BC_forcast$mean,frequency=96, start=c(42,1)), series='TBATS Model')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+
+
+```{r}
+Elect_WOT_D_2S_Arima_BC_RMSE <- sqrt(mean((ts(Elect_WOT_D_2S_Arima_BC_forcast$mean, frequency=96, start = c(42, 1))-Elect_D.ts.test[,"Power_(kW)"])^2))
+Elect_WOT_D_2S_Arima_BC_AIC = Elect_WOT_D_2S_Arima_BC$aicc
+
+cat("The RMSE of Manuel SARIMA with double seasonality model equale to:", Elect_WOT_D_2S_Arima_BC_RMSE, "\n")
+cat("The AIC of SARIMA with double seasonality model equale to:", Elect_WOT_D_2S_Arima_BC_AIC, "\n")
+
+```
+
+
+### II-2-2. Forecasting BATS model
+
+
+```{r}
+Elect_WOT_D_2S_BATS = bats(Elect_2S.ts.train[,"Power_(kW)"], xreg= Elect_2S.ts.train[,"Temp_(C°)"])
+
+```
+
+```{r}
+checkresiduals(Elect_WOT_D_2S_BATS)
+```
+
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+Elect_WOT_D_2S_BATS_forcast <- forecast::forecast(Elect_WOT_D_2S_BATS, h=672, xreg = Elect_2S.ts.test[,"Temp_(C°)"])
+
+```
+```{r}
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series='Temperature') +
+  autolayer(ts(Elect_WOT_D_2S_BATS_forcast$mean,frequency=96, start=c(42,1)), series='BATS Model')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+
+```{r}
+Elect_WOT_D_2S_BATS_RMSE <- sqrt(mean((Elect_WOT_D_2S_BATS_forcast$mean-Elect_2S.ts.test[,"Power_(kW)"])^2))
+Elect_WOT_D_2S_BATS_AIC = Elect_WOT_D_2S_BATS$aicc
+
+cat("The RMSE of TBAST model equale to:", Elect_WOT_D_2S_BATS_RMSE, "\n")
+cat("The AIC of TBAST model equale to:", Elect_WOT_D_2S_BATS_AIC, "\n")
+
+```
+### II-2-3. Forecasting Prophet model
+
+Prophet is a procedure for forecasting time series data based on an additive model where non-linear trends are fit with yearly, weekly, and daily seasonality, plus holiday effects.
+
+First, we should prepare a df for the prophet function.
+
+```{r}
+ds = Elect_data$Timestamp[1:3931]
+y = Elect_data$`Power_(kW)`[1:3931]
+xreg = Elect_data$`Temp_(C°)`[1:3931]
+Prophet_df <- data.frame(ds=ds, "y"=y, "xreg"=xreg)
+```
+
+
+```{r}
+Elect_WOT_D_2S_Prophet <- prophet(Prophet_df, yearly.seasonality = FALSE, weekly.seasonality = 672, daily.seasonality = 96)
+```
+
+```{r}
+future <- make_future_dataframe(Elect_WOT_D_2S_Prophet, periods = 672)
+
+Elect_WOT_D_2S_Prophet_forcast <- predict(Elect_WOT_D_2S_Prophet, future)
+```
+
+```{r}
+autoplot(Elect_D.ts.train[,"Power_(kW)"], series="Elect Train set") + 
+  autolayer(Elect_D.ts.test[,"Power_(kW)"], series='Elect Test set') +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series='Temperature') +
+  autolayer(ts(Elect_WOT_D_2S_Prophet_forcast$yhat[3932:4603], frequency =96, start=c(42,1)), series='Prophet Model')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+```{r}
+Elect_WOT_D_2S_Prophet_RMSE <- sqrt(mean((as.numeric(Elect_WOT_D_2S_Prophet_forcast$yhat[3932:4603]) - as.numeric(Elect_2S.ts.test[,"Power_(kW)"]))^2))
+Elect_WOT_D_2S_Prophet_AIC = Elect_WOT_D_2S_Prophet$aicc
+
+cat("The RMSE of TBAST model equale to:", Elect_WOT_D_2S_Prophet_RMSE, "\n")
+cat("The AIC of TBAST model equale to:", Elect_WOT_D_2S_Prophet_AIC, "\n")
+
+```
+
+# III- Best Models' selection
+## III-1- Univariate Best model
+
+```{r}
+Univ_best_model <- data.frame(
+  Model = c("Simple Seasonality Model", "Double Seasonality Model"),
+  Train_RMSE = c(9.677965,6.933779),
+  Test_RMSE = c(Elect_WOOT_D_Arima_BC_RMSE, Elect_WOOT_D_DSHW_RMSE),
+  Ljung_Box_test = c(0.01107,"8.156e-05"),
+  AICc = c(Elect_WOOT_D_Arima_BC_AIC,"-")
+  
+)
+
+Univ_best_model
+```
+From what we have got as models for the Electricity consumption (Kwh) time series without Temperature, we ca say that the best model to forecast a daily electricity consumption is the Holt Winters model with Double seasonality because this model doesn't show a lot of over fitting problem (RMSE on test set is not so high from the RMSE on train set). The problem with this model is that the residuals  are independent white noise .
+
+If we chose the SARIMA Model (5,1,8)(0,1,1)[96], the residuals are white noise at 90% (alpha=10%) but un over fitting probel is present.
+
+The principal criteria to chose is to avoid the over fitting problem.
+
+```{r}
+Elect_WOOT_D_Chosen_Model <- dshw(Elect_WOOT_D[,"Power_(kW)"], period1=96, period2 = 672, h=672, lambda = 'auto')
+```
+
+
+## III-1- Bivariate Best model
+```{r}
+Biv_best_model <- data.frame(
+  Model = c("Simple Seasonality Model", "Double Seasonality Model"),
+  Train_RMSE = c(7.003965,"-"),
+  Test_RMSE = c(Elect_WOT_D_Arima_BC_RMSE, Elect_WOT_D_2S_BATS_RMSE),
+  Ljung_Box_test = c(0.01107,"1.49e-05"),
+  AICc = c(Elect_WOT_D_Arima_BC_AIC,"46513.68")
+)
+
+Biv_best_model
+```
+
+For the forecast with covariate, the best model is a SARIMA (5,1,12)(0,1,1)[96] because the RMSE on test set is the lowest and the 
+Ljung_Box_test P-value is significant at 90% (alpha = 10%). Also the AICc of this SARIMA Model is the lowest comparing with all others models. But this model seems having a small problem of overfitting because Test_RMSE is high than Train_RMSE.
+
+```{r}
+Elect_WOT_D_Chosen_Model <- Arima(Elect_WOOT_D[,"Power_(kW)"], order=c(5,1,12),  seasonal=c(0,1,1), xreg= Elect_WOOT_D[,"Temp_(C°)"], lambda = "auto")
+```
+
+
+
+
+# IV- Forecasting the february 18th Electricity consumption
+## IV-1- Forecasting the february 18th Electricity consumption Without Temperture
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+#Forecasting 02/18/2010 electricity consumption
+
+Elect_WOOT_D_Chosen_Model_forecast = forecast :: forecast(Elect_WOOT_D_Chosen_Model, h = 96)
+
+#Plotting prediction results
+autoplot(Elect_WOOT_D[,"Power_(kW)"], series="Electricity Consumption 01/01/2010 - 02/17/2010") + 
+  autolayer(ts(Elect_WOOT_D_Chosen_Model_forecast$mean, frequency=96, start=c(49,1)), series='Electricity Consumption 02/18/2010')+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+```
+
+## IV-2- Forecasting the february 18th Electricity consumption With Temperture
+
+
+```{r fig.height = 3, fig.width = 7, fig.align='center'}
+# February 18th Temperature for prediction 
+
+Temp_Pred <- ts(window(Elect[,"Temp_(C°)"], start = "2010-02-18 00:00:00", end = "2010-02-18 23:45:00"), frequency = 96, start=c(49,1), end=c(49,96))
+
+
+#Forecasting 02/18/2010 electricity consumption
+Elect_WOT_D_Chosen_Model_forecast = forecast :: forecast(Elect_WOT_D_Chosen_Model, xreg= Temp_Pred, h = 96)
+
+#Plotting prediction results
+autoplot(Elect_WOOT_D[,"Power_(kW)"], series="Electricity Consumption 01/01/2010 - 02/17/2010") +
+  autolayer(Elect_WOOT_D[,"Temp_(C°)"], series="Temperature 01/01/2010 - 02/17/2010") +
+  autolayer(Elect_WOT_D_Chosen_Model_forecast$mean, series='Electricity Consumption 02/18/2010')+
+  autolayer(Temp_Pred, series="Temperature 02/07/2010 - 02/18/2010")+
+  ggtitle ('Electricity Consumption') +
+  xlab('Time (day)') +
+  ylab('Consumption (kW)')
+
+```
+
+## IV-3- Saving the forecast values
+```{r}
+#Save prediction in Data Frame
+Pred_DataFrame <- data.frame("18th_Elect_Pred_WOOT" = as.numeric(Elect_WOOT_D_Chosen_Model_forecast$mean) , "18th_Elect_Pred_WOT" = as.numeric(Elect_WOT_D_Chosen_Model_forecast$mean))
+
+#Save prediction results to xlsx file
+write_xlsx(Pred_DataFrame, path  = "./Moussa_GRICHE.xlsx")
+```
+
+# V- Conclusion
+This time series represents some specificities such as high frequency and double seasonality (daily and weekly).
+To model this time series with correct predictions, I decided to choose the model with less overfitting instead of a model with white noise residuals.
